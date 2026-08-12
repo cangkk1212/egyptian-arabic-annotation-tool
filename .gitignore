@@ -1,0 +1,25 @@
+# 数据文件
+audio/
+annotations/
+annotations_copy/
+ar_audios/
+
+# 配置文件（含 API Key）
+/config.json
+
+# Python
+__pycache__/
+*.pyc
+
+# 环境
+.env
+*.log
+
+# 临时文件
+*.tmp
+__tmp_*
+tunnel_url.txt
+
+# VAD 工具输出
+vad_tool/input/
+vad_tool/output/

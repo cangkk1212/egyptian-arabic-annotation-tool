@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Login — Egyptian Arabic Annotation Tool</title>
+<style>
+:root{
+  --bg:#13131f; --card:#1e1e2e; --card2:#252536; --card3:#2a2a3c;
+  --text:#e2e4ec; --t2:#989bb0; --t3:#6c6f85;
+  --bdr:#2e2e40; --bdr2:#363650;
+  --pri:#818cf8; --suc:#34d399; --warn:#fbbf24; --err:#f87171;
+  --rad:12px; --rad-sm:8px; --rad-btn:6px;
+  --sh:0 1px 3px rgba(0,0,0,.15); --sh-md:0 4px 12px rgba(0,0,0,.25);
+  --font:Inter,'Segoe UI','Helvetica Neue',sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{
+  font-family:var(--font);background:var(--bg);color:var(--text);
+  font-size:14px;line-height:1.55;
+  display:flex;align-items:center;justify-content:center;
+  min-height:100vh;padding:20px;
+}
+.card{
+  background:var(--card);border:1px solid var(--bdr);
+  border-radius:var(--rad);box-shadow:var(--sh-md);
+  padding:48px 48px 36px;width:100%;max-width:520px;
+}
+.logo{
+  font-weight:900;font-size:28px;line-height:1.35;
+  background:linear-gradient(135deg,#d4a853,#f5d78a,#d4a853);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent;
+  text-shadow:0 0 30px rgba(212,168,83,.4),0 0 60px rgba(212,168,83,.2);
+  letter-spacing:2px;text-align:center;
+}
+.sep{height:1px;background:var(--bdr);margin:24px 0}
+.sub{color:var(--t2);font-size:14px;margin-bottom:20px;text-align:center}
+.label{display:block;text-align:left;font-size:12px;font-weight:600;color:var(--t2);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}
+.inp{
+  width:100%;padding:12px 14px;border:1px solid var(--bdr2);border-radius:var(--rad-btn);
+  background:var(--card2);color:var(--text);font-size:15px;font-family:var(--font);
+  outline:none;transition:border-color .15s;
+}
+.inp:focus{border-color:var(--pri)}
+.inp::placeholder{color:var(--t3)}
+.btn{
+  width:100%;padding:12px;border:none;border-radius:var(--rad-btn);
+  font-size:15px;font-weight:600;cursor:pointer;font-family:var(--font);
+  transition:all .15s;margin-top:14px;
+}
+.btn-p{background:var(--pri);color:#fff}.btn-p:hover{opacity:.9}
+.btn-p:disabled{opacity:.5;cursor:not-allowed}
+.err{
+  margin-top:10px;padding:8px 14px;border-radius:6px;
+  background:rgba(248,113,113,.12);color:var(--err);
+  font-size:13px;display:none;text-align:left;
+}
+.err.show{display:block}
+.hint{font-size:13px;color:var(--t3);margin-top:20px;line-height:1.6;text-align:left}
+.lb-card{margin-top:24px;padding:14px 16px;border-radius:var(--rad-sm);background:var(--card2);border:1px solid var(--bdr)}
+.lb-card b{color:var(--text);display:block;margin-bottom:10px;font-size:14px}
+.lb-scroll{max-height:300px;overflow-y:auto}
+.lb-scroll::-webkit-scrollbar{width:4px}
+.lb-scroll::-webkit-scrollbar-track{background:transparent}
+.lb-scroll::-webkit-scrollbar-thumb{background:var(--bdr2);border-radius:2px}
+.lb-table{width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed}
+.lb-table th{text-align:left;padding:6px 4px;color:var(--t3);font-weight:600;border-bottom:1px solid var(--bdr);font-size:11px;letter-spacing:.3px;position:sticky;top:0;background:var(--card2);z-index:1}
+.lb-table td{padding:6px 4px;color:var(--t2);border-bottom:1px solid rgba(255,255,255,.03);overflow:hidden;text-overflow:ellipsis}
+.lb-table tr:hover td{background:rgba(255,255,255,.02)}
+.lb-table .lb-rank{text-align:center;color:var(--t3);width:10%}
+.lb-table .lb-user{font-weight:600;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;width:32%}
+.lb-table .lb-num{text-align:center;font-family:var(--mono,monospace);width:30%}
+.lb-table .lb-hr{text-align:right;font-family:var(--mono,monospace);width:28%}
+.lb-table .lb-me td{background:rgba(129,140,248,.08)}
+.lb-empty{padding:10px 0;text-align:center;color:var(--t3);font-size:12px}
+</style>
+</head>
+<body>
+
+<div class="card">
+  <div class="logo">◈ Egyptian Arabic<br>Annotation Tool</div>
+  <div class="sub">Enter your name to start annotating</div>
+
+  <label class="label" for="username">Your Name</label>
+  <input class="inp" type="text" id="username" placeholder="e.g. Ahmed Ali" autocomplete="off" autofocus maxlength="50">
+  <button class="btn btn-p" id="joinBtn" onclick="doLogin()">Join</button>
+
+  <div class="err" id="errMsg"></div>
+
+  <div class="hint">
+    Please keep your account name consistent throughout your participation. The name you provide will be associated with the annotations you create to help identify your contributions.
+  </div>
+
+  <div class="lb-card" id="lbCard">
+    <b>📊 Annotation Dashboard</b>
+    <div class="lb-scroll">
+      <div class="lb-empty" id="lbEmpty">Loading...</div>
+      <table class="lb-table" id="lbTable" style="display:none">
+        <thead><tr><th class="lb-rank">#</th><th>User</th><th class="lb-num">Annotated</th><th class="lb-hr">Hours</th></tr></thead>
+        <tbody id="lbBody"></tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+var _busy = false;
+async function doLogin(){
+  if(_busy)return;
+  var name = document.getElementById('username').value.trim();
+  if(!name){showErr('Please enter a name.');return}
+  _busy = true;
+  var btn = document.getElementById('joinBtn');
+  btn.disabled = true; btn.textContent = 'Joining…';
+  hideErr();
+  try{
+    var r = await fetch('/api/login',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({username:name})
+    });
+    var j = await r.json();
+    if(!r.ok){showErr(j.error||'Login failed');_busy=false;btn.disabled=false;btn.textContent='Join';return}
+    window.location.href = '/';
+  }catch(e){showErr('Network error. Please try again.');_busy=false;btn.disabled=false;btn.textContent='Join'}
+}
+function showErr(m){var e=document.getElementById('errMsg');e.textContent=m;e.classList.add('show')}
+function hideErr(){var e=document.getElementById('errMsg');e.classList.remove('show')}
+
+function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
+
+async function loadLeaderboard(){
+  var tbody=document.getElementById('lbBody'),empty=document.getElementById('lbEmpty'),tbl=document.getElementById('lbTable');
+  try{
+    var r=await fetch('/api/leaderboard');var j=await r.json();
+    if(!j.leaderboard||!j.leaderboard.length){empty.textContent='No data yet';return}
+    empty.style.display='none';tbl.style.display='';
+    var me=document.getElementById('username').value.trim();
+    tbody.innerHTML=j.leaderboard.map(function(row,i){
+      var cls=row.user===me?' lb-me':'';
+      var h=row.hours<0.01?'<0.01':row.hours.toFixed(2);
+      return '<tr class="'+cls+'"><td class="lb-rank">'+(i+1)+'</td><td class="lb-user" title="'+esc(row.user)+'">'+esc(row.user)+'</td><td class="lb-num">'+row.annotated+'</td><td class="lb-hr">'+h+'h</td></tr>';
+    }).join('');
+  }catch(e){empty.textContent='Failed to load'}
+}
+document.getElementById('username').addEventListener('keydown',function(e){if(e.key==='Enter')doLogin()});
+loadLeaderboard();
+</script>
+</body>
+</html>

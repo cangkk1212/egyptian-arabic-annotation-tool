@@ -1,0 +1,7 @@
+flask>=3.0
+gunicorn>=21.0
+torch>=2.0
+torchaudio>=2.0
+soundfile>=0.12
+silero-vad>=6.0
+dashscope>=1.20

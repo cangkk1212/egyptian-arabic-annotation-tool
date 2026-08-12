@@ -1,0 +1,21 @@
+{
+  "audio_dir": "./audio",
+  "annotations_dir": "./annotations",
+  "port": 8080,
+  "backup_dir": "./annotations_copy",
+  "secret_key": "",
+  "session_timeout_minutes": 30,
+  "vad": {
+    "min_speech_duration_ms": 3000,
+    "min_silence_duration_ms": 300,
+    "threshold": 0.5,
+    "max_segment_duration_s": 30,
+    "speech_pad_ms": 100
+  },
+  "asr": {
+    "api_key": "sk-your-api-key-here",
+    "model": "qwen3.5-omni-plus",
+    "language": "ar",
+    "workers": 10
+  }
+}

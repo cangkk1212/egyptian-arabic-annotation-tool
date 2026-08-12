@@ -1,0 +1,17 @@
+[Unit]
+Description=Egyptian Arabic Annotation Tool
+After=network.target
+
+[Service]
+Type=simple
+User=huawei
+WorkingDirectory=/home/cjg/annotation_tool
+ExecStart=/home/huawei/anaconda3/bin/gunicorn -c gunicorn_config.py server:app
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/cjg/annotation_tool/gunicorn.log
+StandardError=append:/home/cjg/annotation_tool/gunicorn.log
+
+[Install]
+WantedBy=multi-user.target

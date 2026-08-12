@@ -1,0 +1,16 @@
+[Unit]
+Description=Cloudflare Tunnel for arabic-annotation.top
+After=network.target audio-annotator.service
+Requires=audio-annotator.service
+
+[Service]
+Type=simple
+User=huawei
+ExecStart=/home/huawei/bin/cloudflared tunnel run arabic-annotation
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/cjg/annotation_tool/tunnel.log
+StandardError=append:/home/cjg/annotation_tool/tunnel.log
+
+[Install]
+WantedBy=multi-user.target

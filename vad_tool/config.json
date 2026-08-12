@@ -1,0 +1,11 @@
+{
+  "input_dir": "./input",
+  "output_dir": "./output",
+  "min_speech_duration_ms": 500,
+  "min_silence_duration_ms": 400,
+  "threshold": 0.5,
+  "max_segment_duration_s": 30,
+  "speech_pad_ms": 100,
+  "sample_rate": 16000,
+  "extensions": [".wav", ".mp3", ".flac", ".ogg", ".m4a"]
+}
