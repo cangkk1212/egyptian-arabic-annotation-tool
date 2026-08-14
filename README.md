@@ -1,6 +1,6 @@
 # 埃及方言音频标注工具
 
-基于 Web 的阿拉伯语（埃及方言）音频标注平台，集成 VAD 自动断句、ASR 预标注、内容分类和波形可视化。
+基于 Web 的阿拉伯语（埃及方言）音频标注平台，集成 VAD 自动断句、ASR 预标注、内容分类、波形可视化、多用户登录与任务自动分配。
 
 ## 功能概览
 
@@ -8,26 +8,46 @@
 |------|------|
 | **VAD 自动断句** | silero-vad 6.x 语音活动检测，自动切分语音段 |
 | **ASR 预标注** | 阿里云 DashScope Qwen3.5-Omni 多模态大模型阿拉伯语转写 |
-| **内容分类** | 基于转写文本自动分类（DashScope Qwen-Turbo） |
+| **内容分类** | 基于转写文本自动分类（DashScope Qwen-Turbo，10 类 + Other） |
+| **用户登录** | 姓名登录 + Flask 签名会话，同名互斥，30 分钟会话超时 |
+| **任务自动分配** | 登录后随机分配待标注文件，文件锁防并发，分配超时自动释放 |
+| **排行榜** | 按标注员统计已完成文件数与标注时长，30 秒自动刷新 |
 | **波形可视化** | Canvas 对称波形图，点击跳转，播放自动滚动 |
 | **标注编辑** | 在线修改转写文本、调整时间戳、标记质量 |
-| **文件夹管理** | 树形文件浏览器，进度统计 |
-| **自动保存** | 切换音频即时保存，文件锁防并发冲突 |
-| **Cloudflare 部署** | 命名隧道 + 自有域名，全球 CDN 加速，HTTPS 自动证书 |
+| **跳过标记** | Noisy / Not Egyptian / Poor Quality 三种原因整文件跳过 |
+| **历史导航** | Back / Next 在最近 10 个处理过的文件间往返修改 |
+| **自动保存** | 输入 3 秒 / 失焦 / 提交前自动保存，失败自动重试 |
+| **标注导出** | export.py 按用户汇总已标注/跳过的文件，导出 Excel |
+| **Cloudflare 部署** | 命名隧道 + 自有域名 arabic-annotation.top，全球 CDN 加速，HTTPS 自动证书 |
+| **24 小时监控** | monitor.sh 每分钟巡检，自动拉起故障服务（带熔断保护） |
+
+## 访问地址
+
+> 🔗 **https://arabic-annotation.top**
+
+- 标注员操作手册：[标注工具使用说明.md](标注工具使用说明.md)
+- 部署运维指南：[DEPLOY.md](DEPLOY.md)
 
 ## 项目结构
 
 ```
 annotation_tool/
-├── server.py                    # Flask HTTP 服务器（标注 API）
+├── server.py                    # Flask HTTP 服务器（标注 API + 登录/分配）
 ├── index.html                   # 标注前端单页应用
+├── login.html                   # 登录页（含排行榜）
 ├── preprocess.py                # 音频预处理（VAD 断句 + ASR 预标注）
 ├── classify.py                  # 长音频内容分类
+├── export.py                    # 标注统计导出 Excel
 ├── gunicorn_config.py           # Gunicorn 生产配置
+├── config.json                  # 运行配置（路径、VAD、ASR、密钥）
 ├── config.example.json          # 配置模板
 ├── requirements.txt             # Python 依赖
 ├── audio-annotator.service      # Gunicorn systemd 服务
-├── cloudflared-tunnel.service   # Cloudflare 隧道 systemd 服务
+├── cloudflared-tunnel.service   # Cloudflare 命名隧道 systemd 服务
+├── monitor.sh                   # 24 小时监控脚本（每分钟巡检，自动拉起）
+├── health_check.sh              # 旧巡检脚本（已被 monitor.sh 取代）
+├── tunnel.sh                    # 旧临时隧道脚本（已被命名隧道取代）
+├── 标注工具使用说明.md           # 标注员操作手册
 ├── vad_tool/                    # 独立 VAD 切分工具
 │   ├── vad_splitter.py           # 音频断句，输出 WAV 片段
 │   └── config.json               # VAD 参数配置
@@ -56,8 +76,10 @@ pip install -r requirements.txt
 | VAD 断句 | silero-vad 6.x | 预训练语音活动检测，CPU/GPU 均可 |
 | ASR 预标注 | Qwen3.5-Omni (DashScope) | 阿里云多模态大模型，阿拉伯语转写 |
 | 音频分类 | Qwen-Turbo (DashScope) | 文本分类，10 类 + Other |
-| 后端 | Flask + Gunicorn | HTTP API + 多进程并发 |
+| 登录认证 | Flask session | 签名 cookie + secret_key，30 分钟会话超时 |
+| 后端 | Flask + Gunicorn | HTTP API + 4 workers × 4 threads |
 | 前端 | 原生 HTML/CSS/JS | 单页应用，Canvas 波形图 |
+| 导出 | openpyxl | 标注统计导出 Excel |
 | 隧道 | Cloudflare Tunnel | 命名隧道 + 自有域名，全球 CDN |
 
 ## 配置
@@ -70,6 +92,8 @@ pip install -r requirements.txt
   "annotations_dir": "/path/to/annotations",
   "port": 8080,
   "backup_dir": "/path/to/backup",
+  "secret_key": "随机字符串（登录会话签名，可用 python3 -c 'import secrets;print(secrets.token_hex(32))' 生成）",
+  "session_timeout_minutes": 30,
   "vad": {
     "min_speech_duration_ms": 3000,
     "min_silence_duration_ms": 300,
@@ -79,30 +103,33 @@ pip install -r requirements.txt
   },
   "asr": {
     "api_key": "sk-xxx",
-    "model": "qwen3.5-omni-plus-2026-03-15",
+    "model": "qwen3.5-omni-plus",
     "language": "ar",
     "workers": 10
   }
 }
 ```
 
+- `asr.api_key` 留空或缺失时，预处理只做 VAD 断句、跳过 ASR 预标注。
+- VAD 参数只从 `config.json` 读取，修改后重新运行预处理即可。
+
 ## 工作流程
 
 ### 1. 准备音频
 
-将音频文件（.mp3/.wav/.flac 等）放入 `audio_dir` 目录，支持子文件夹。目录结构镜像到标注目录。
+将音频文件（.wav / .mp3 / .flac / .ogg / .m4a / .webm / .opus / .wma / .aac）放入 `audio_dir` 目录，支持子文件夹。目录结构镜像到标注目录。
 
 ### 2. 预处理（VAD 断句 + ASR 预标注）
 
 ```bash
-# 仅 VAD 断句（无 ASR）
+# VAD 断句；配置了 asr.api_key 时同时做 ASR 预标注
 python3 preprocess.py
 
-# VAD + ASR 预标注（需配置 api_key）
+# 指定 ASR 并发线程数（默认取 config.json 的 asr.workers）
 python3 preprocess.py -w 10
 
 # 强制重新处理所有文件
-python3 preprocess.py -w 10 --force
+python3 preprocess.py --force
 ```
 
 **断点续传**：预处理自动跳过已有标注的文件和段，中断后直接重新运行即可。
@@ -128,13 +155,28 @@ python3 classify.py --dry-run
 # 开发模式
 python3 server.py --port 8080
 
-# 生产模式（Gunicorn，4 workers × 4 threads）
+# 生产模式（Gunicorn，4 workers × 4 threads，timeout 300s）
 gunicorn -c gunicorn_config.py server:app
 ```
 
-### 5. 部署到公网
+### 5. 登录标注
 
-参见 [DEPLOY.md](DEPLOY.md)，包含 systemd 配置、Cloudflare 命名隧道设置、域名配置等。
+浏览器打开 `http://localhost:8080`（生产环境为 https://arabic-annotation.top），输入姓名登录：
+
+- 登录后系统**随机自动分配**一个待标注文件（无需手动挑选），分配期间文件对其他标注员锁定；
+- 同名互斥：一个名字同一时间只能一人使用（30 分钟无活动自动释放）；
+- 提交（Mark Done / Skip）后自动加载下一个文件；Back / Next 可在最近 10 个历史文件间往返修改；
+- 关闭浏览器超过 72 小时后，分配的文件自动释放回待分配池，已保存内容不受影响。
+
+### 6. 导出标注统计
+
+```bash
+python3 export.py   # 按用户汇总已标注/跳过的文件 → annotation_export.xlsx
+```
+
+### 7. 部署到公网与监控
+
+参见 [DEPLOY.md](DEPLOY.md)，包含 systemd 配置、Cloudflare 命名隧道、域名配置，以及 monitor.sh 24 小时自动拉起监控。
 
 ## 独立 VAD 切分工具
 
@@ -150,15 +192,17 @@ python3 vad_splitter.py -t 0.7 --min-speech 800 --min-silence 300
 
 | 功能 | 说明 |
 |------|------|
-| 文件夹视图 | 左侧树形展示，显示各文件夹标注进度 |
+| 登录与排行榜 | 姓名登录，右侧可折叠排行榜实时显示各标注员贡献 |
+| 任务自动分配 | 登录即随机分配待标注文件，文件锁防并发 |
 | 段播放 | 每段独立播放按钮，播完自动停止 |
 | 连续播放 | 顶部音频播放器连续播放全部 |
 | VAD 区间编辑 | 手动调整起止时间（毫秒精度），约束不重叠 |
-| 跳过标记 | 噪声过大 / 非埃及方言 / 音质太差 |
-| 质量标记 | 每段可标记「质量差」，不适合训练 |
-| 标注完成 | 确认整段音频标注完成 |
-| ASR 预标注 | 自动填入转写结果，标注者修改确认 |
-| 自动保存 | 切换音频、标注完成、跳过标记均即时保存 |
+| 跳过标记 | 整文件跳过：Noisy（噪声）/ Not Egyptian（非埃及方言）/ Poor Quality（音质差），三选一 |
+| 质量标记 | 每段可标记 Bad Quality（不参与训练），无需填文本即可提交 |
+| 标注完成 | ✓ Mark Done 提交，自动校验所有段均有文本 |
+| 历史导航 | ↩ Back / Next ▶ 在最近 10 个文件间往返，可重新编辑已提交文件 |
+| ASR 预标注 | 自动填入转写结果（灰色参考文字），标注者手动输入确认 |
+| 自动保存 | 输入 3 秒 / 失焦 / Bad Quality / 提交前即时保存 |
 | 波形图 | 对称波形，点击跳转，播放自动滚动 |
 | 备份 | 每次保存同步写入备份目录 |
 
@@ -166,9 +210,9 @@ python3 vad_splitter.py -t 0.7 --min-speech 800 --min-silence 300
 
 | 快捷键 | 功能 |
 |--------|------|
-| `Tab` | 下一段 |
-| `Shift + Tab` | 上一段 |
-| `Ctrl + S` | 保存 |
+| `Enter` | 登录页提交姓名 |
+| `Tab` / `Shift + Tab` | 文本框跳到下一段 / 上一段 |
+| `Ctrl + S`（Mac 为 `Cmd + S`） | 保存当前文件所有修改 |
 
 ## 标注 JSON 格式
 
@@ -180,6 +224,9 @@ python3 vad_splitter.py -t 0.7 --min-speech 800 --min-silence 300
   "status": "annotated",
   "skip_reasons": [],
   "category": "Other-Politics",
+  "annotated_by": "张三",
+  "skipped_by": null,
+  "last_modified": "2026-08-05T17:24:18",
   "segments": [
     {
       "id": 1,
@@ -190,8 +237,7 @@ python3 vad_splitter.py -t 0.7 --min-speech 800 --min-silence 300
       "text": "مرحبا بكم في حلقة اليوم",
       "exclude_from_training": false
     }
-  ],
-  "last_modified": "2026-08-05T17:24:18"
+  ]
 }
 ```
 
@@ -205,7 +251,8 @@ python3 vad_splitter.py -t 0.7 --min-speech 800 --min-silence 300
 | `max_segment_duration_s` | 30 | 单段最长时长（秒） |
 | `speech_pad_ms` | 100 | 段前后填充（ms） |
 
-```bash
-# 命令行临时覆盖
-python3 preprocess.py --min-speech 2000 --min-silence 500
-```
+参数在 `config.json` 的 `vad` 段中修改，保存后重新运行预处理即可（未处理的文件生效）。
+
+## 24 小时监控（monitor.sh）
+
+`monitor.sh` 由 crontab 每分钟执行，检测本地后端（`http://localhost:8080/api/health`）与公网入口（`https://arabic-annotation.top/api/health`）两个健康地址，故障时自动重启对应服务，并带熔断保护（30 分钟内最多重启 5 次）。配置方法见 [DEPLOY.md](DEPLOY.md) 的「24小时监控」一节。旧脚本 `health_check.sh` 已被取代。

@@ -7,6 +7,7 @@ VAD segmentation, ASR pre-annotation, waveform display, folder structure, user l
 import argparse
 import fcntl
 import json
+import logging
 import os
 import random
 import re
@@ -15,6 +16,10 @@ import struct
 import time
 from functools import wraps
 from pathlib import Path
+
+# 错误日志写入 gunicorn.log（systemd 已重定向），用于排查线上问题
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+logger = logging.getLogger("annotator")
 
 import soundfile as sf
 from flask import Flask, request, jsonify, send_file, make_response, session, redirect, url_for
@@ -606,6 +611,26 @@ def api_health():
     return jsonify({"ok": True, "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S")})
 
 
+@app.route("/api/clientlog", methods=["POST"])
+def api_clientlog():
+    """接收前端上报的错误，追加写入 client_errors.log（无需登录，用于排查远端用户的问题）。"""
+    data = request.get_json(silent=True) or {}
+    entry = {
+        "time": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "user": session.get("user", "anonymous"),
+        "type": str(data.get("type", "unknown"))[:50],
+        "message": str(data.get("message", ""))[:500],
+        "url": str(data.get("url", ""))[:300],
+        "ip": request.headers.get("X-Forwarded-For", request.remote_addr or ""),
+    }
+    try:
+        with open(SCRIPT_DIR / "client_errors.log", "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError as e:
+        logger.warning("clientlog write failed: %s", e)
+    return jsonify({"success": True})
+
+
 # ============================================================
 # Task Assignment API (all protected)
 # ============================================================
@@ -721,6 +746,57 @@ def api_release_assignment():
     return jsonify({"success": True, "next": True})
 
 
+@app.route("/api/reopen", methods=["POST"])
+@login_required
+def api_reopen():
+    """重新打开已提交的文件，允许用户返回修改。"""
+    username = session.get("user", "")
+    data = request.get_json(silent=True) or {}
+    target_audio = data.get("audio_name", "").strip()
+    if not target_audio:
+        return jsonify({"success": False, "error": "Missing audio_name"}), 400
+
+    # 检查目标文件是否已被分配给其他标注员（防止 Back/Forward 抢占他人正在处理的文件）
+    cleanup_stale_assignments()
+    assignments = load_assignments()
+    for name, entry in assignments.items():
+        if name != username and entry.get("audio") == target_audio:
+            return jsonify({"success": False, "error": "File is currently assigned to another annotator"}), 409
+
+    # 释放当前 assignment
+    release_assignment(username)
+
+    # 保留目标文件原有状态（annotated/skipped 不变）：
+    # 导航本身不应改变标注状态，只有用户显式提交（Mark Done / Skip）才更新。
+
+    # 重新分配给当前用户
+    assignments = load_assignments()
+    _, flat = scan_audio_structure()
+    rel_path = ""
+    for rp in flat:
+        if _rel_path_to_key(rp) == target_audio:
+            rel_path = rp
+            break
+    assignments[username] = {
+        "audio": target_audio,
+        "rel_path": rel_path,
+        "assigned_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "last_activity": time.time(),
+    }
+    save_assignments(assignments)
+
+    return jsonify({"success": True})
+
+
+@app.route("/api/assignment/abandon", methods=["POST"])
+@login_required
+def api_abandon_assignment():
+    """释放当前分配但不改变文件状态（用于 Next 目标被他人领取时直接换新文件）。"""
+    username = session.get("user", "")
+    release_assignment(username)
+    return jsonify({"success": True})
+
+
 # ============================================================
 # Annotation API (all protected)
 # ============================================================
@@ -779,7 +855,7 @@ def api_save():
         audio_name = Path(rel_path).stem if rel_path else ""
 
     if not audio_name:
-        return jsonify({"success": False, "error": "缺少音频名称"}), 400
+        return jsonify({"success": False, "error": "Missing audio name"}), 400
 
     # 加载已有数据
     seg_data = load_segments(audio_name) or {
@@ -824,6 +900,7 @@ def api_save():
         backup_segments(audio_name, seg_data)
         save_segments(audio_name, seg_data)
     except Exception as e:
+        logger.exception("SAVE FAILED audio=%s user=%s: %s", audio_name, session.get("user", "unknown"), e)
         return jsonify({"success": False, "error": str(e)}), 500
 
     return jsonify({"success": True, "timestamp": seg_data["last_modified"], "annotator": seg_data["last_modified_by"]})

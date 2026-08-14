@@ -63,8 +63,6 @@ tr.sel td{background:rgba(129,140,248,.1)}
 .btn-ex{padding:4px 10px;border-radius:20px;border:1px solid var(--bdr2);background:var(--card2);color:var(--t2);cursor:pointer;font-size:12px;font-family:var(--font);font-weight:500;transition:all .15s;white-space:nowrap}
 .btn-ex:hover{border-color:var(--err);color:var(--err)}
 .btn-ex.on{background:rgba(248,113,113,.15);border-color:var(--err);color:var(--err);font-weight:700}
-.btn-ex.saving{animation:spin .6s linear infinite;border-color:var(--warn);color:var(--warn)}
-.btn-ex.saved{border-color:var(--suc);color:var(--suc)}
 .ti{width:96px;background:transparent;border:1px solid var(--bdr2);color:var(--text);font-family:var(--mono);font-size:14px;padding:2px 4px;border-radius:4px;text-align:center}
 .ti:disabled{opacity:.5}
 
@@ -141,6 +139,8 @@ tr.sel td{background:rgba(129,140,248,.1)}
     <button class="chip" id="ce">Not Egyptian</button>
     <button class="chip" id="cp">Poor Quality</button>
     <div class="tb-sep"></div>
+    <button class="btn btn-o" id="btnBack" onclick="goBack()" style="font-size:12px;padding:5px 14px;white-space:nowrap;display:none">↩ Back</button>
+    <button class="btn btn-o" id="btnNext" onclick="goForward()" style="font-size:12px;padding:5px 14px;white-space:nowrap;display:none">Next ▶</button>
     <button class="btn btn-o" onclick="doSave()" style="font-size:12px;padding:5px 14px;white-space:nowrap">💾 Save</button>
     <button class="btn btn-s" id="cdone" style="font-size:13px;padding:8px 20px;white-space:nowrap">✓ Mark Done</button>
   </div>
@@ -171,8 +171,8 @@ tr.sel td{background:rgba(129,140,248,.1)}
 
 <script>
 // ===== GLOBAL STATE =====
-var S={an:'',rel_path:'',segs:[],skips:[],cfm:false,status:'pending',
-        ws:[],wd:0,wm:1e-6,asg:-1,pps:60,_autoSaveTimers:{},_dirtySegs:{}};
+var S={an:'',rel_path:'',segs:[],skips:[],cfm:false,status:'pending',_keepStatus:false,
+        ws:[],wd:0,wm:1e-6,asg:-1,pps:60,_autoSaveTimers:{},_dirtySegs:{},_history:[],_fwd:[]};
 var G={total:0,annotated:0,skipped:0,pending:0}; // global stats
 var tt=null;
 function $(id){return document.getElementById(id)}
@@ -184,13 +184,36 @@ function toast(m,c){
   tt=setTimeout(function(){el.remove();tt=null},2000);
 }
 
+function reportClientError(type,message){
+  // 把浏览器端错误上报到服务器 client_errors.log（静默失败不影响用户）
+  try{
+    fetch('/api/clientlog',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({type:type,message:String(message||''),url:location.href})}).catch(function(){});
+  }catch(e){}
+}
 async function api(u,b){
   var o=b?{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(b)}:undefined;
-  var r=await fetch(u,o);var j=await r.json();
+  var r;
+  try{r=await fetch(u,o)}
+  catch(e){reportClientError('network',u+' :: '+e.message);throw new Error('Network connection failed, please try again later ('+e.message+')')}
+  var j;
+  try{j=await r.json()}
+  catch(e){reportClientError('bad_response',u+' :: HTTP '+r.status+' :: '+e.message);throw new Error('Server returned an error (HTTP '+r.status+')')}
   if(r.status===401){window.location.href='/login.html';throw new Error('Not authenticated')}
-  if(!r.ok)throw new Error(j.error||'HTTP '+r.status);return j;
+  if(!r.ok){reportClientError('http_error',u+' :: HTTP '+r.status+' :: '+(j.error||''));throw new Error(j.error||'HTTP '+r.status)}
+  return j;
 }
 function updStats(){$('sd').textContent=G.annotated;$('sk').textContent=G.skipped;$('sl').textContent=G.pending;$('st').textContent=G.total}
+async function refreshStats(){
+  // Re-fetch authoritative server-side stats. A file re-submitted after "Back"
+  // must not increment the counters again (same file = same count).
+  try{
+    var stats=await api('/api/stats');
+    G.total=stats.total;G.annotated=stats.annotated;G.skipped=stats.skipped;G.pending=stats.pending;
+    updStats();
+  }catch(e){console.error('Stats refresh failed:',e)}
+  loadLeaderboard(); // keep the Dashboard in sync too
+}
 
 // ===== CHIPS =====
 function updateChipsUI(){
@@ -206,7 +229,7 @@ function syncSkips(){
   var ns=S.cfm?'annotated':(S.skips.length?'skipped':'pending');
   S.status=ns;applyLock();
 }
-function applyLock(){var lk=S.skips.length>0||S.cfm;var tas=document.querySelectorAll('#tw textarea');for(var i=0;i<tas.length;i++)tas[i].disabled=lk;var tis=document.querySelectorAll('#tw .ti');for(var j=0;j<tis.length;j++)tis[j].disabled=lk}
+function applyLock(){var lk=(S.skips.length>0||S.cfm)&&!S._keepStatus;var tas=document.querySelectorAll('#tw textarea');for(var i=0;i<tas.length;i++)tas[i].disabled=lk;var tis=document.querySelectorAll('#tw .ti');for(var j=0;j<tis.length;j++)tis[j].disabled=lk}
 
 // ===== INIT =====
 async function init(){
@@ -239,6 +262,8 @@ async function loadAssignment(){
     // Populate state from assignment
     S.an=d.audio_name;S.rel_path=d.rel_path||'';S.segs=d.segments||[];
     S.status=d.status||'pending';S.skips=d.skip_reasons||[];S.cfm=S.status==='annotated';
+    // Reopened previously-submitted file: keep its status (still editable) until the user explicitly re-submits
+    S._keepStatus=S.status==='annotated'||S.status==='skipped';
     S.ws=[];S.wd=d.duration||0;S.wm=1e-6;S._dirtySegs={};S._autoSaveTimers={};
 
     $('topbar').style.display='';$('wcrd').style.display='';
@@ -311,6 +336,7 @@ $('au').addEventListener('play',function(){
   if(S._segMode<0)S._stopAtEnd=false;
 });
 $('au').addEventListener('canplay',function(){
+  S._audioErr=0; // 音频加载成功，重置重试标志
   if(S._pendingPlay>=0){
     var i=S._pendingPlay;S._pendingPlay=-1;
     var trs=$('tw').querySelectorAll('tr');for(var r=0;r<trs.length;r++)trs[r].classList.remove('sel');
@@ -328,7 +354,7 @@ function resetAllBtns(){
 
 function renderTable(){
   if(!S.segs.length){$('tw').innerHTML='<div class="empty">Not yet processed. Please wait for preprocessing to complete, then refresh.</div>';return}
-  var lk=S.skips.length>0||S.cfm,h='<table><thead><tr><th class="c0">▶</th><th class="c1">#</th><th class="c2">Start</th><th class="c2">End</th><th class="c3">Duration</th><th class="c4">Text</th><th class="c5">Quality</th></tr></thead><tbody>';
+  var lk=(S.skips.length>0||S.cfm)&&!S._keepStatus,h='<table><thead><tr><th class="c0">▶</th><th class="c1">#</th><th class="c2">Start</th><th class="c2">End</th><th class="c3">Duration</th><th class="c4">Text</th><th class="c5">Quality</th></tr></thead><tbody>';
   for(var i=0;i<S.segs.length;i++){
     var seg=S.segs[i],sc=S.asg===i?' sel':'',tc=seg.text&&seg.text.trim()?'done':(seg.asr_text?'asr':'');
     var b=getBounds(i);
@@ -444,17 +470,26 @@ $('cdone').onclick=async function(){
 
   showLoading();document.querySelector('#loadOverlay .ltext').textContent='Completing task...';
   S.cfm=true;$('cn').classList.remove('on');$('ce').classList.remove('on');$('cp').classList.remove('on');
+  S._keepStatus=false;
   syncSkips();applyLock();
+  // 提交通过 Back 返回的文件时保留 forward 栈：提交后停留在当前文件，
+  // 用户可继续 Next 回到之前最新处理的文件，而不是直接加载新分配的文件
+  var returning=S._fwd.length>0;
+  if(returning){$('btnNext').style.display=''}
+  else{
+    S._fwd=[];$('btnNext').style.display='none'; // new submission invalidates forward stack
+    S._history.push(S.an);if(S._history.length>10)S._history.shift();$('btnBack').style.display='';
+  }
   try{
     var txt=document.querySelector('#loadOverlay .ltext');
     txt.textContent='Saving...';
     await saveInternal(true);
     txt.textContent='Submitting...';
     await api('/api/assignment/release',{status:'annotated',skip_reasons:[]});
-    toast('✅ Task complete! Loading next...','g');
-    G.annotated+=1;G.pending=G.total-G.annotated-G.skipped;
-    updStats();
-    setTimeout(async function(){await loadAssignment();_chipBusy=false},800);
+    toast(returning?'✅ Task complete! Press Next ▶ to return to your latest file':'✅ Task complete! Loading next...','g');
+    await refreshStats();
+    if(returning){hideLoading();_chipBusy=false}
+    else{setTimeout(async function(){await loadAssignment();_chipBusy=false},800)}
   }catch(e){
     document.querySelector('#loadOverlay .ltext').textContent='Failed: '+e.message;
     setTimeout(function(){hideLoading();_chipBusy=false},1000);
@@ -463,13 +498,32 @@ $('cdone').onclick=async function(){
 
 async function onChipClick(el){
   if(_chipBusy)return;_chipBusy=true;
-  showLoading();document.querySelector('#loadOverlay .ltext').textContent='Saving...';
   el.classList.toggle('on');
-  if(el.classList.contains('on'))S.cfm=false;
+  if(!el.classList.contains('on')){_chipBusy=false;return} // allow un-toggle without action
+  S.cfm=false;$('cn').classList.remove('on');$('ce').classList.remove('on');$('cp').classList.remove('on');
+  el.classList.add('on'); // re-set only this chip
+  S._keepStatus=false;
   syncSkips();applyLock();
-  try{await saveInternal(true);document.querySelector('#loadOverlay .ltext').textContent='✅ Saved'}
-  catch(e){document.querySelector('#loadOverlay .ltext').textContent='Save failed'}
-  setTimeout(function(){hideLoading();_chipBusy=false},600);
+  // 跳过通过 Back 返回的文件时同样保留 forward 栈，停留当前文件供 Next 继续前进
+  var returning=S._fwd.length>0;
+  if(returning){$('btnNext').style.display=''}
+  else{
+    S._fwd=[];$('btnNext').style.display='none';
+    S._history.push(S.an);if(S._history.length>10)S._history.shift();$('btnBack').style.display='';
+  }
+  showLoading();document.querySelector('#loadOverlay .ltext').textContent='Skipping...';
+  try{
+    await saveInternal(true);
+    document.querySelector('#loadOverlay .ltext').textContent='Submitting...';
+    await api('/api/assignment/release',{status:'skipped',skip_reasons:S.skips});
+    toast(returning?'⏭ Skipped. Press Next ▶ to return to your latest file':'⏭ Skipped. Loading next...','g');
+    await refreshStats();
+    if(returning){hideLoading();_chipBusy=false}
+    else{setTimeout(async function(){await loadAssignment();_chipBusy=false},800)}
+  }catch(e){
+    document.querySelector('#loadOverlay .ltext').textContent='Failed: '+e.message;
+    setTimeout(function(){hideLoading();_chipBusy=false},1000);
+  }
 }
 $('cn').onclick=function(){onChipClick(this)};
 $('ce').onclick=function(){onChipClick(this)};
@@ -480,14 +534,11 @@ async function toggleExclude(i,btn){
   var newVal=!seg.exclude_from_training;
   seg.exclude_from_training=newVal;
   btn.classList.toggle('on',newVal);
-  btn.classList.add('saving');
   try{
     await api('/api/save',{audio_name:S.an,segments:[{id:seg.id,exclude_from_training:newVal}]});
-    btn.classList.remove('saving');btn.classList.add('saved');
-    setTimeout(function(){btn.classList.remove('saved')},1200);
   }catch(e){
     seg.exclude_from_training=!newVal;btn.classList.toggle('on',!newVal);
-    btn.classList.remove('saving','saved');toast('Save failed: '+e.message,'r');
+    toast('Save failed: '+e.message,'r');
   }
 }
 
@@ -576,7 +627,25 @@ document.onkeydown=function(e){
   if(e.target.tagName==='TEXTAREA'){if((e.ctrlKey||e.metaKey)&&e.key==='s'){e.preventDefault();doSave()}return}
   if((e.ctrlKey||e.metaKey)&&e.key==='s'){e.preventDefault();doSave()}
 };
-$('au').onerror=function(){toast('Audio load failed','r')};
+
+// 未捕获的 JS 错误上报（用于排查「页面空白」类问题）
+window.onerror=function(msg,src,line,col){
+  reportClientError('js_error',msg+' @ '+src+':'+line+':'+col);
+  return false;
+};
+$('au').onerror=function(){
+  reportClientError('audio_error',(S.an||'')+' :: '+$('au').src);
+  if(!S._audioErr){
+    S._audioErr=1; // 首次失败自动重试一次
+    var src=$('au').src;
+    $('au').src=src+(src.indexOf('?')>=0?'&':'?')+'retry=1';
+    $('au').load();
+    toast('⚠ Audio load failed — retrying once...','r');
+  }else{
+    S._audioErr=0;
+    toast('Audio load failed','r');
+  }
+};
 
 // ===== LOGOUT =====
 async function doLogout(){
@@ -586,6 +655,69 @@ async function doLogout(){
 
 // Heartbeat
 setInterval(function(){fetch('/api/heartbeat').catch(function(){})},120000);
+
+// ===== BACK / FORWARD BUTTONS =====
+var _navBusy=false;
+async function goBack(){
+  if(_navBusy||!S._history.length)return;
+  _navBusy=true;
+  var prev=S._history.pop();
+  S._fwd.push(S.an);if(S._fwd.length>10)S._fwd.shift();
+  if(!S._history.length)$('btnBack').style.display='none';
+  $('btnNext').style.display='';
+  showLoading('Going back...');
+  try{
+    await api('/api/reopen',{audio_name:prev});
+    await loadAssignment();
+    await refreshStats();
+    toast('↩ Returned to previous file','g');
+  }catch(e){
+    S._history.push(prev);S._fwd.pop();
+    $('btnBack').style.display='';
+    if(!S._fwd.length)$('btnNext').style.display='none';
+    hideLoading();
+    toast('Failed to go back: '+e.message,'r');
+  }finally{_navBusy=false}
+}
+
+async function goForward(){
+  if(_navBusy||!S._fwd.length)return;
+  _navBusy=true;
+  var nxt=S._fwd.pop();
+  S._history.push(S.an);if(S._history.length>10)S._history.shift();
+  if(!S._fwd.length)$('btnNext').style.display='none';
+  $('btnBack').style.display='';
+  showLoading('Going forward...');
+  try{
+    await api('/api/reopen',{audio_name:nxt});
+    await loadAssignment();
+    await refreshStats();
+    toast('▶ Moved to newer file','g');
+  }catch(e){
+    if((e.message||'').indexOf('another annotator')>=0){
+      // 唯一会被领走的只有最初那条未完成的新文件：
+      // 放弃回溯，释放当前分配（不改变状态），直接领取新文件
+      S._fwd=[];
+      try{
+        await api('/api/assignment/abandon',{});
+        await loadAssignment();
+        await refreshStats();
+        toast('↪ 原文件已被其他标注员领取，已为您分配新文件','g');
+      }catch(e2){
+        S._fwd.push(nxt);
+        $('btnNext').style.display='';
+        hideLoading();
+        toast('Failed: '+e2.message,'r');
+      }
+    }else{
+      S._fwd.push(nxt);S._history.pop();
+      $('btnNext').style.display='';
+      if(!S._history.length)$('btnBack').style.display='none';
+      hideLoading();
+      toast('Failed to go forward: '+e.message,'r');
+    }
+  }finally{_navBusy=false}
+}
 
 // ===== SIDEBAR =====
 function esc(s){var d=document.createElement('div');d.textContent=s;return d.innerHTML}
@@ -611,6 +743,11 @@ async function loadLeaderboard(){
 
 init();
 loadLeaderboard();
+// Dashboard 自动同步：每 30 秒轮询一次；窗口重新获得焦点时立即刷新（隐藏时不请求）。
+// refreshStats() 会同时刷新右上角统计（Confirmed/Skipped/Pending/Total）和排行榜，
+// 保证不同标注员之间的进度数字及时同步。
+setInterval(function(){if(!document.hidden)refreshStats()},30000);
+window.addEventListener('focus',function(){refreshStats()});
 </script>
 </body>
 </html>

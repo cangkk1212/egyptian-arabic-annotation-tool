@@ -23,3 +23,9 @@ tunnel_url.txt
 # VAD 工具输出
 vad_tool/input/
 vad_tool/output/
+
+# 运行时状态/锁文件
+.monitor_state
+.monitor_restarts
+.monitor.lock
+.~lock*

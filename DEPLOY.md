@@ -97,6 +97,63 @@ sudo systemctl start audio-annotator cloudflared-tunnel
 
 两个服务均已设为 `enable`，服务器重启后自动启动，无需手动干预。
 
+## 24小时监控（自动拉起）
+
+`monitor.sh` 由 crontab 每分钟执行一次，检测两个健康地址并自动拉起故障服务。systemd 的 `Restart=always` 只能处理进程崩溃，本脚本补充覆盖**进程假死**（进程在但接口无响应）和**隧道断连**场景。
+
+| 检查项 | 地址 | 失败时动作 |
+|--------|------|-----------|
+| 本地后端 | `http://localhost:8080/api/health` | 重启 `audio-annotator`（并确保隧道仍在运行） |
+| 公网入口 | `https://arabic-annotation.top/api/health` | 重启 `cloudflared-tunnel` |
+
+### 一次性配置（root 权限）
+
+1. 授权 huawei 无密码管理这两个服务（监控脚本重启服务需要）：
+
+```bash
+echo 'huawei ALL=(root) NOPASSWD: /usr/bin/systemctl * audio-annotator, /usr/bin/systemctl * cloudflared-tunnel' \
+  | sudo tee /etc/sudoers.d/annotator-monitor
+sudo chmod 440 /etc/sudoers.d/annotator-monitor
+sudo visudo -c   # 校验语法
+```
+
+2. 安装 crontab 定时任务（每分钟）：
+
+```bash
+( crontab -l 2>/dev/null | grep -v 'annotation_tool/monitor.sh'; \
+  echo '* * * * * /home/cjg/annotation_tool/monitor.sh' ) | crontab -
+crontab -l   # 确认
+```
+
+### 保护机制
+
+- **熔断**：同一服务 30 分钟内最多自动重启 5 次，超过后记录 `CRITICAL` 并停止拉起（窗口滑过后自动恢复尝试），避免坏配置导致无限重启循环
+- **最小间隔**：同一服务两次重启至少间隔 90 秒，避免启动期间被反复重启
+- **并发锁**：flock 防止上一轮未结束时并发执行
+
+### 日志与状态
+
+```bash
+tail -f /home/cjg/annotation_tool/monitor.log        # 动作日志（DOWN/ACTION/RECOVER/CRITICAL）
+cat /home/cjg/annotation_tool/.monitor_state         # 当前状态（ok/down/critical）
+cat /home/cjg/annotation_tool/.monitor_restarts      # 30 分钟内的重启记录
+```
+
+日志只在状态变化或执行动作时记录，不会刷屏；每天约 00:00 写一行 `HEARTBEAT` 证明守护脚本存活。收到 `CRITICAL` 日志说明自动拉起已连续失败 5 次，需人工排查（`gunicorn.log` / `tunnel.log`）。
+
+### 验证
+
+```bash
+# 演练（模拟本地/公网故障，不真正重启）
+MON_LOCAL_URL=http://localhost:9999/x /home/cjg/annotation_tool/monitor.sh --dry-run --verbose
+MON_PUBLIC_URL=http://localhost:9999/x /home/cjg/annotation_tool/monitor.sh --dry-run --verbose
+
+# 正常巡检（服务健康时无任何输出、无日志）
+/home/cjg/annotation_tool/monitor.sh --verbose
+```
+
+> 注意：原 `health_check.sh`（仅记录异常、不自动拉起）已被 monitor.sh 取代，可不再使用。
+
 ## 数据路径
 
 | 数据 | 路径 |
